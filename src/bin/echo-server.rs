@@ -1,4 +1,4 @@
-use lan_bet::*;
+use lan_bet::network::*;
 use std::io::ErrorKind;
 use tokio::net::TcpListener;
 
@@ -25,7 +25,10 @@ async fn handle_connection(mut connection: Connection) {
             .unwrap();
         handle_client(username, connection).await;
     } else {
-        connection.send(Packet::ResponsePacket(Response::Error)).await.unwrap();
+        connection
+            .send(Packet::ResponsePacket(Response::Error))
+            .await
+            .unwrap();
     }
 }
 
@@ -54,12 +57,17 @@ async fn handle_client(username: String, mut connection: Connection) {
             if let Packet::RequestPacket(request) = packet {
                 match request {
                     Request::Login { user: _ } => {
-                        connection.send(Packet::ResponsePacket(Response::Error)).await.unwrap();
+                        connection
+                            .send(Packet::ResponsePacket(Response::Error))
+                            .await
+                            .unwrap();
                         break; //relogin, no
                     }
                     Request::WhoAmI => {
                         connection
-                            .send(Packet::ResponsePacket(Response::Ok(RequestResponse::WhoAmI(username.clone()))))
+                            .send(Packet::ResponsePacket(Response::Ok(
+                                RequestResponse::WhoAmI(username.clone()),
+                            )))
                             .await
                             .unwrap();
                     }

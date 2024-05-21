@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use surrealdb::opt::auth::Root;
 use surrealdb::sql::Thing;
 use surrealdb::Surreal;
@@ -65,9 +65,13 @@ impl DatabaseConnection {
     }
 
     pub async fn add_user(&mut self, user: User) -> Result<Record> {
-        let mut res: Vec<Record> = self.connection.create("user").content(user).await?;
+        let res: Option<Record> = self
+            .connection
+            .create(("user", &user.name))
+            .content(user)
+            .await?;
 
-        Ok(res.pop().unwrap()) //there should be one (and only one) element created
+        Ok(res.unwrap())
     }
 
     pub async fn add_wager(&mut self, wager: Wager) -> Result<Record> {
@@ -142,5 +146,9 @@ impl DatabaseConnection {
         let _: Option<Bet> = self.connection.delete(bet_id).await?;
 
         Ok(())
+    }
+
+    pub async fn get_user(&mut self, name: &str) -> Option<User> {
+        self.connection.select(("user", name)).await.unwrap()
     }
 }

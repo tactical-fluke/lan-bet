@@ -21,8 +21,9 @@ async fn main() {
         .send(Packet::RequestPacket(Request::WhoAmI))
         .await
         .unwrap();
-    let response = connection.read().await.unwrap();
-    if let Packet::ResponsePacket(Response::Ok(RequestResponse::WhoAmI(username))) = response {
+    let response = connection.read().await;
+    dbg!(&response);
+    if let Ok(Packet::ResponsePacket(Response::Ok(RequestResponse::WhoAmI(username)))) = response {
         println!("username: {}", username);
     } else {
         println!("oh no! {:?}", response);

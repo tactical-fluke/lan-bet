@@ -148,7 +148,50 @@ impl DatabaseConnection {
         Ok(())
     }
 
-    pub async fn get_user(&mut self, name: &str) -> Option<User> {
-        self.connection.select(("user", name)).await.unwrap()
+    pub async fn get_user(&mut self, name: &str) -> Result<Option<User>> {
+        self.connection.select(("user", name)).await
+    }
+
+    pub async fn get_bets_by_user(&mut self, username: &str) -> Result<Vec<Bet>> {
+        let constructed_id = Thing {
+            tb: "user".into(),
+            id: username.into(),
+        };
+        self.connection
+            .query("SELECT * from bet WHERE user = $user_id;")
+            .bind(("user_id", constructed_id))
+            .await?
+            .take(0)
+    }
+
+    pub async fn get_all_wagers(&mut self) -> Result<Vec<Wager>> {
+        self.connection.select("wager").await
+    }
+
+    pub async fn get_all_wager_options_for_wager(
+        &mut self,
+        wager_id: &str,
+    ) -> Result<Vec<WagerOption>> {
+        let constructed_id = Thing {
+            tb: "wager".into(),
+            id: wager_id.into(),
+        };
+        self.connection
+            .query("SELECT * FROM wager_option WHERE wager = $wager_id;")
+            .bind(("wager_id", constructed_id))
+            .await?
+            .take(0)
+    }
+
+    pub async fn get_all_bets_for_wager_option(&mut self, option_id: &str) -> Result<Vec<Bet>> {
+        let constructed_id = Thing {
+            tb: "bet".into(),
+            id: option_id.into(),
+        };
+        self.connection
+            .query("SELECT * FROM bet WHERE wager_option = $option_id;")
+            .bind(("option_id", constructed_id))
+            .await?
+            .take(0)
     }
 }

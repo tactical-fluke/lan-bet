@@ -15,7 +15,12 @@ enum DatabaseRequest {
 #[tokio::main]
 async fn main() {
     let mut database = DatabaseConnection::new("127.0.0.1:8000").await.unwrap();
-    let _ = database.add_user(User { name: "aidan".into(), balance: 2000 }).await; // do not care about failure, as the user could already have been created
+    let _ = database
+        .add_user(User {
+            name: "aidan".into(),
+            balance: 2000,
+        })
+        .await; // do not care about failure, as the user could already have been created
     let (db_tx, db_rx) = mpsc::channel(32);
 
     tokio::spawn(async move {
@@ -40,7 +45,7 @@ async fn manage_database(mut db: DatabaseConnection, mut rx: mpsc::Receiver<Data
         match request {
             DatabaseRequest::GetUser { name, responder } => {
                 let resp = db.get_user(&name).await;
-                let _ = responder.send(resp);
+                let _ = responder.send(resp.unwrap());
             }
         }
     }

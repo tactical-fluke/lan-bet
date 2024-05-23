@@ -12,7 +12,7 @@ async fn main() {
         .await
         .unwrap();
     let response = connection.read().await.unwrap();
-    if response == Packet::ResponsePacket(Response::Ok(RequestResponse::None)) {
+    if response == Packet::ResponsePacket(Response::None) {
         println!("success!");
     } else {
         println!("oh no!")
@@ -23,13 +23,16 @@ async fn main() {
         .unwrap();
     let response = connection.read().await;
     dbg!(&response);
-    if let Ok(Packet::ResponsePacket(Response::Ok(RequestResponse::WhoAmI(username)))) = response {
+    if let Ok(Packet::ResponsePacket(Response::WhoAmI(username))) = response {
         println!("username: {}", username);
     } else {
         println!("oh no! {:?}", response);
     }
 
-    connection.send(Packet::RequestPacket(Request::WagerData)).await.unwrap();
+    connection
+        .send(Packet::RequestPacket(Request::WagerData))
+        .await
+        .unwrap();
     let response = connection.read().await;
     dbg!(&response);
 }

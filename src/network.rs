@@ -16,12 +16,6 @@ pub enum Request {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum Response {
-    Ok(RequestResponse),
-    Error,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub enum RequestResponse {
     None,
     WhoAmI(String),
     WagerData(Vec<crate::database::WagerInfo>),
@@ -31,6 +25,7 @@ pub enum RequestResponse {
 pub enum Packet {
     RequestPacket(Request),
     ResponsePacket(Response),
+    Error,
 }
 
 pub struct Connection {

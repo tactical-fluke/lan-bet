@@ -1,7 +1,7 @@
 use lan_bet::database::*;
 use lan_bet::network::*;
-use surrealdb::Result;
 use std::io::ErrorKind;
+use surrealdb::Result;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -13,7 +13,7 @@ enum DatabaseRequest {
     },
     GetWagerInfo {
         responder: oneshot::Sender<Result<Vec<WagerInfo>>>,
-    }
+    },
 }
 
 #[tokio::main]
@@ -50,7 +50,7 @@ async fn manage_database(mut db: DatabaseConnection, mut rx: mpsc::Receiver<Data
             DatabaseRequest::GetUser { name, responder } => {
                 let resp = db.get_user(&name).await;
                 let _ = responder.send(resp.unwrap());
-            },
+            }
             DatabaseRequest::GetWagerInfo { responder } => {
                 let resp = db.get_all_bet_info().await;
                 let _ = responder.send(resp);
@@ -63,16 +63,13 @@ async fn handle_connection(mut connection: Connection, mut tx: mpsc::Sender<Data
     let user = handle_login(&mut connection, &mut tx).await;
     if let Ok(username) = user {
         connection
-            .send(Packet::ResponsePacket(Response::Ok(RequestResponse::None)))
+            .send(Packet::ResponsePacket(Response::None))
             .await
             .unwrap();
         dbg!("moving to handle client");
         handle_client(username, connection, &mut tx).await;
     } else {
-        connection
-            .send(Packet::ResponsePacket(Response::Error))
-            .await
-            .unwrap();
+        connection.send(Packet::Error).await.unwrap();
     }
 }
 
@@ -115,7 +112,11 @@ async fn handle_login(
     }
 }
 
-async fn handle_client(username: String, mut connection: Connection, tx: &mut mpsc::Sender<DatabaseRequest>,) {
+async fn handle_client(
+    username: String,
+    mut connection: Connection,
+    tx: &mut mpsc::Sender<DatabaseRequest>,
+) {
     loop {
         let packet = connection.read().await;
         dbg!(&packet);
@@ -124,34 +125,28 @@ async fn handle_client(username: String, mut connection: Connection, tx: &mut mp
                 match request {
                     Request::Login { user: _ } => {
                         dbg!("duplicate login detected!");
-                        connection
-                            .send(Packet::ResponsePacket(Response::Error))
-                            .await
-                            .unwrap();
+                        connection.send(Packet::Error).await.unwrap();
                         break; //relogin, no
                     }
                     Request::WhoAmI => {
                         connection
-                            .send(Packet::ResponsePacket(Response::Ok(
-                                RequestResponse::WhoAmI(username.clone()),
-                            )))
+                            .send(Packet::ResponsePacket(Response::WhoAmI(username.clone())))
                             .await
                             .unwrap();
-                    },
+                    }
                     Request::WagerData => {
                         let (db_tx, db_rx) = oneshot::channel();
-                        tx.send(DatabaseRequest::GetWagerInfo { responder: db_tx }).await.unwrap();
+                        tx.send(DatabaseRequest::GetWagerInfo { responder: db_tx })
+                            .await
+                            .unwrap();
                         let response = db_rx.await.unwrap();
                         if let Ok(wager_info) = response {
-                            connection.send(Packet::ResponsePacket(
-                                Response::Ok(
-                                    RequestResponse::WagerData(wager_info)
-                                )
-                            )).await.unwrap();
+                            connection
+                                .send(Packet::ResponsePacket(Response::WagerData(wager_info)))
+                                .await
+                                .unwrap();
                         } else {
-                            connection.send(Packet::ResponsePacket(
-                                Response::Error
-                            )).await.unwrap();
+                            connection.send(Packet::Error).await.unwrap();
                         }
                     }
                 }

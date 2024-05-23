@@ -37,7 +37,7 @@ async fn main() -> surrealdb::Result<()> {
     let created_bet = db
         .add_bet(Bet {
             user: created_user.id.clone(),
-            wager_option: created_wager.id.clone(),
+            wager_option: created_wager_option.id.clone(),
             val: 400,
         })
         .await?;

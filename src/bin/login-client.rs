@@ -28,4 +28,8 @@ async fn main() {
     } else {
         println!("oh no! {:?}", response);
     }
+
+    connection.send(Packet::RequestPacket(Request::WagerData)).await.unwrap();
+    let response = connection.read().await;
+    dbg!(&response);
 }

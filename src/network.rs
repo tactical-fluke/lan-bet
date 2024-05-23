@@ -11,6 +11,7 @@ const BUFFER_LIMIT: usize = 1048576;
 pub enum Request {
     Login { user: String },
     WhoAmI,
+    WagerData,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub enum Response {
 pub enum RequestResponse {
     None,
     WhoAmI(String),
+    WagerData(Vec<crate::database::WagerInfo>),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]

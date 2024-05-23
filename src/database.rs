@@ -44,6 +44,28 @@ pub struct Bet {
     pub val: u64,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct WagerInfo {
+    id: Thing,
+    name: String,
+    description: String,
+    options: Vec<WagerOptionInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct WagerOptionInfo {
+    id: Thing,
+    name: String,
+    description: String,
+    bets: Vec<BetInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct BetInfo {
+    id: Thing,
+    pub val: u64,
+}
+
 pub struct DatabaseConnection {
     connection: Surreal<Client>,
 }
@@ -93,7 +115,7 @@ impl DatabaseConnection {
         // TODO if any of these fail, we should actually unwind, and delete the option
         self.connection.query("UPDATE $id SET pool = <future> { math::sum((SELECT val FROM bet WHERE id = $id).val)};")
             .bind(("id", res.first().unwrap().id.clone())).await?;
-        self.connection.query("UPDATE $wager SET options = array::add((SELECT options FROM $wager).options, $id);")
+        self.connection.query("UPDATE $wager SET options = array::add($wager.options, $id);")
             .bind(("id", res.first().unwrap().id.clone()))
             .bind(("wager", option.wager.clone())).await?;
         Ok(res.pop().unwrap())
@@ -103,8 +125,8 @@ impl DatabaseConnection {
         let mut res: Vec<Record> = self.connection.create("bet").content(&bet).await?;
 
         // TODO if this fails, unwind and delete the bet
-        self.connection.query("UPDATE $wager_option SET bets = array::add((SELECT bets FROM $wager_option).bets, $id);")
-            .bind(("id", res.first().unwrap().clone().id))
+        self.connection.query("UPDATE $wager_option SET bets = array::add($wager_option.bets, $id);")
+            .bind(("id", res.first().unwrap().id.clone()))
             .bind(("wager_option", bet.wager_option.clone())).await?;
         Ok(res.pop().unwrap())
     }
@@ -193,5 +215,12 @@ impl DatabaseConnection {
             .bind(("option_id", constructed_id))
             .await?
             .take(0)
+    }
+
+    pub async fn get_all_bet_info(&mut self) -> Result<Vec<WagerInfo>> {
+        let mut response = self.connection.query("SELECT * FROM wager FETCH options, options.bets").await?;
+        let result = response.take(0);
+        dbg!(&result);
+        result
     }
 }

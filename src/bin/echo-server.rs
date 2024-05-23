@@ -1,5 +1,6 @@
 use lan_bet::database::*;
 use lan_bet::network::*;
+use surrealdb::Result;
 use std::io::ErrorKind;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -10,6 +11,9 @@ enum DatabaseRequest {
         name: String,
         responder: oneshot::Sender<Option<User>>,
     },
+    GetWagerInfo {
+        responder: oneshot::Sender<Result<Vec<WagerInfo>>>,
+    }
 }
 
 #[tokio::main]
@@ -46,6 +50,10 @@ async fn manage_database(mut db: DatabaseConnection, mut rx: mpsc::Receiver<Data
             DatabaseRequest::GetUser { name, responder } => {
                 let resp = db.get_user(&name).await;
                 let _ = responder.send(resp.unwrap());
+            },
+            DatabaseRequest::GetWagerInfo { responder } => {
+                let resp = db.get_all_bet_info().await;
+                let _ = responder.send(resp);
             }
         }
     }
@@ -59,7 +67,7 @@ async fn handle_connection(mut connection: Connection, mut tx: mpsc::Sender<Data
             .await
             .unwrap();
         dbg!("moving to handle client");
-        handle_client(username, connection).await;
+        handle_client(username, connection, &mut tx).await;
     } else {
         connection
             .send(Packet::ResponsePacket(Response::Error))
@@ -107,7 +115,7 @@ async fn handle_login(
     }
 }
 
-async fn handle_client(username: String, mut connection: Connection) {
+async fn handle_client(username: String, mut connection: Connection, tx: &mut mpsc::Sender<DatabaseRequest>,) {
     loop {
         let packet = connection.read().await;
         dbg!(&packet);
@@ -129,6 +137,22 @@ async fn handle_client(username: String, mut connection: Connection) {
                             )))
                             .await
                             .unwrap();
+                    },
+                    Request::WagerData => {
+                        let (db_tx, db_rx) = oneshot::channel();
+                        tx.send(DatabaseRequest::GetWagerInfo { responder: db_tx }).await.unwrap();
+                        let response = db_rx.await.unwrap();
+                        if let Ok(wager_info) = response {
+                            connection.send(Packet::ResponsePacket(
+                                Response::Ok(
+                                    RequestResponse::WagerData(wager_info)
+                                )
+                            )).await.unwrap();
+                        } else {
+                            connection.send(Packet::ResponsePacket(
+                                Response::Error
+                            )).await.unwrap();
+                        }
                     }
                 }
             }

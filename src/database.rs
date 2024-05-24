@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use surrealdb::opt::auth::Root;
-use surrealdb::sql::Thing;
+use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
 use surrealdb::{
     engine::remote::ws::{Client, Ws},
     Result,
 };
+
+use surrealdb::sql::statements::BeginStatement;
+use surrealdb::sql::statements::CommitStatement;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Record {
@@ -13,56 +16,115 @@ pub struct Record {
     pub id: Thing,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct User {
+    pub id: Thing,
     pub name: String,
     pub balance: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+impl User {
+    pub fn new(name: impl Into<String> + Clone, balance: u64) -> Self {
+        Self {
+            id: Thing {
+                tb: "user".into(),
+                id: Id::String(name.clone().into()),
+            },
+            name: name.into(),
+            balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Wager {
+    pub id: Thing,
     pub name: String,
     pub description: String,
     pub pot: u64,
-    pub pool: Option<u64>,
     pub options: Vec<Thing>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+impl Wager {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, pot: u64) -> Self {
+        Self {
+            id: Thing {
+                tb: "wager".into(),
+                id: Id::rand(),
+            },
+            name: name.into(),
+            description: description.into(),
+            pot,
+            options: vec![],
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WagerOption {
+    pub id: Thing,
     pub name: String,
     pub description: String,
-    pub pool: Option<u64>,
     pub wager: Thing,
     pub bets: Vec<Thing>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+impl WagerOption {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, wager: Thing) -> Self {
+        Self {
+            id: Thing {
+                tb: "wager_option".into(),
+                id: Id::rand(),
+            },
+            name: name.into(),
+            description: description.into(),
+            wager,
+            bets: vec![],
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Bet {
+    pub id: Thing,
     pub user: Thing,
     pub wager_option: Thing,
     pub val: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+impl Bet {
+    pub fn new(user: Thing, wager_option: Thing, val: u64) -> Self {
+        Self {
+            id: Thing {
+                tb: "bet".into(),
+                id: Id::rand(),
+            },
+            user,
+            wager_option,
+            val,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct WagerInfo {
-    id: Thing,
-    name: String,
-    description: String,
-    options: Vec<WagerOptionInfo>,
+    pub id: Thing,
+    pub name: String,
+    pub description: String,
+    pub options: Vec<WagerOptionInfo>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct WagerOptionInfo {
-    id: Thing,
-    name: String,
-    description: String,
-    bets: Vec<BetInfo>,
+    pub id: Thing,
+    pub name: String,
+    pub description: String,
+    pub bets: Vec<BetInfo>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct BetInfo {
-    id: Thing,
+    pub id: Thing,
     pub val: u64,
 }
 
@@ -86,49 +148,46 @@ impl DatabaseConnection {
         Some(Self { connection: db })
     }
 
-    pub async fn add_user(&mut self, user: User) -> Result<Record> {
-        let res: Option<Record> = self
+    pub async fn add_user(&mut self, user: &User) -> Result<()> {
+        let _: Option<Record> = self
             .connection
             .create(("user", &user.name))
             .content(user)
             .await?;
 
-        Ok(res.unwrap())
+        Ok(())
     }
 
-    pub async fn add_wager(&mut self, wager: Wager) -> Result<Record> {
-        let mut res: Vec<Record> = self.connection.create("wager").content(wager).await?;
+    pub async fn add_wager(&mut self, wager: &Wager) -> Result<()> {
+        let _: Vec<Record> = self.connection.create("wager").content(wager).await?;
 
-        // TODO if this fails, unwind and remove the wager
-        self.connection.query("UPDATE $id SET pool = <future> { math::sum((SELECT pool FROM wager_option WHERE id = $id).pool)};")
-            .bind(("id", res.first().unwrap().id.clone())).await?;
-        Ok(res.pop().unwrap())
+        Ok(())
     }
 
-    pub async fn add_wager_option(&mut self, option: WagerOption) -> Result<Record> {
-        let mut res: Vec<Record> = self
-            .connection
-            .create("wager_option")
-            .content(&option)
+    pub async fn add_wager_option(&mut self, option: &WagerOption) -> Result<()> {
+        self.connection
+            .query(BeginStatement)
+            .query("CREATE $id SET name = $name, description = $description, wager = $wager, bets = $bets")
+            .bind(&option)
+            .query("UPDATE $wager SET options = array::add($wager.options, $id);")
+            .bind(("id", &option.id))
+            .bind(("wager", &option.wager))
+            .query(CommitStatement)
             .await?;
-
-        // TODO if any of these fail, we should actually unwind, and delete the option
-        self.connection.query("UPDATE $id SET pool = <future> { math::sum((SELECT val FROM bet WHERE id = $id).val)};")
-            .bind(("id", res.first().unwrap().id.clone())).await?;
-        self.connection.query("UPDATE $wager SET options = array::add($wager.options, $id);")
-            .bind(("id", res.first().unwrap().id.clone()))
-            .bind(("wager", option.wager.clone())).await?;
-        Ok(res.pop().unwrap())
+        Ok(())
     }
 
-    pub async fn add_bet(&mut self, bet: Bet) -> Result<Record> {
-        let mut res: Vec<Record> = self.connection.create("bet").content(&bet).await?;
-
-        // TODO if this fails, unwind and delete the bet
-        self.connection.query("UPDATE $wager_option SET bets = array::add($wager_option.bets, $id);")
-            .bind(("id", res.first().unwrap().id.clone()))
-            .bind(("wager_option", bet.wager_option.clone())).await?;
-        Ok(res.pop().unwrap())
+    pub async fn add_bet(&mut self, bet: &Bet) -> Result<()> {
+        self.connection
+            .query(BeginStatement)
+            .query("CREATE $id SET user = $user, wager_option = $option, val = $val;")
+            .bind(&bet)
+            .query("UPDATE $wager_option SET bets = array::add($wager_option.bets, $id);")
+            .bind(("id", &bet.id))
+            .bind(("wager_option", &bet.wager_option))
+            .query(CommitStatement)
+            .await?;
+        Ok(())
     }
 
     pub async fn remove_wager(&mut self, wager_id: &Thing) -> Result<()> {
@@ -218,7 +277,10 @@ impl DatabaseConnection {
     }
 
     pub async fn get_all_bet_info(&mut self) -> Result<Vec<WagerInfo>> {
-        let mut response = self.connection.query("SELECT * FROM wager FETCH options, options.bets").await?;
+        let mut response = self
+            .connection
+            .query("SELECT * FROM wager FETCH options, options.bets")
+            .await?;
         let result = response.take(0);
         dbg!(&result);
         result

@@ -1,18 +1,31 @@
 use lan_bet::database::*;
 use lan_bet::network::*;
+use std::collections::HashMap;
 use std::io::ErrorKind;
+use surrealdb::sql::Thing;
 use surrealdb::Result;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+type Responder<T> = oneshot::Sender<Result<T>>;
+
 enum DatabaseRequest {
     GetUser {
         name: String,
-        responder: oneshot::Sender<Option<User>>,
+        responder: Responder<Option<User>>,
+    },
+    GetAllWagerInfo {
+        responder: Responder<Vec<WagerInfo>>,
     },
     GetWagerInfo {
-        responder: oneshot::Sender<Result<Vec<WagerInfo>>>,
+        id: Thing,
+        responder: Responder<Option<WagerInfo>>,
+    },
+    ProvidePayout {
+        bet_info: BetInfo,
+        winning_ratio: f64,
+        responder: Responder<()>,
     },
 }
 
@@ -44,14 +57,71 @@ async fn manage_database(mut db: DatabaseConnection, mut rx: mpsc::Receiver<Data
         match request {
             DatabaseRequest::GetUser { name, responder } => {
                 let resp = db.get_user(&name).await;
-                let _ = responder.send(resp.unwrap());
+                let _ = responder.send(resp);
             }
-            DatabaseRequest::GetWagerInfo { responder } => {
+            DatabaseRequest::GetAllWagerInfo { responder } => {
                 let resp = db.get_all_bet_info().await;
+                let _ = responder.send(resp);
+            }
+            DatabaseRequest::GetWagerInfo { id, responder } => {
+                let resp = db.get_info_for_wager(id).await;
+                let _ = responder.send(resp);
+            }
+            DatabaseRequest::ProvidePayout {
+                bet_info,
+                winning_ratio,
+                responder,
+            } => {
+                let resp = db.provide_payout_for_bet(&bet_info, winning_ratio).await;
                 let _ = responder.send(resp);
             }
         }
     }
+}
+
+async fn resolve_wager(
+    tx: mpsc::Sender<DatabaseRequest>,
+    wager_id: Thing,
+    winning_option_id: Thing,
+) -> Result<()> {
+    let (wager_tx, wager_rx) = oneshot::channel();
+    tx.send(DatabaseRequest::GetWagerInfo {
+        id: wager_id,
+        responder: wager_tx,
+    })
+    .await
+    .unwrap();
+
+    let wager_info = wager_rx.await.unwrap()?.unwrap();
+    let mut wager_total_map = HashMap::new();
+    for option in &wager_info.options {
+        let total: u64 = option.bets.iter().map(|bet| bet.val).sum();
+        wager_total_map.insert(option.id.clone(), total);
+    }
+
+    let abs_total: u64 =
+        wager_total_map.iter().map(|(_, value)| value).sum::<u64>() + wager_info.pot;
+    let winning_ratio = abs_total as f64 / *wager_total_map.get(&winning_option_id).unwrap() as f64;
+
+    let winning_bets = &wager_info
+        .options
+        .iter()
+        .find(|option| option.id == winning_option_id)
+        .unwrap()
+        .bets;
+
+    for winning_bet in winning_bets {
+        let (payout_tx, payout_rx) = oneshot::channel();
+        tx.send(DatabaseRequest::ProvidePayout {
+            bet_info: winning_bet.clone(),
+            winning_ratio,
+            responder: payout_tx,
+        })
+        .await
+        .unwrap();
+        payout_rx.await.unwrap()?;
+    }
+    Ok(())
 }
 
 async fn handle_connection(mut connection: Connection, mut tx: mpsc::Sender<DatabaseRequest>) {
@@ -73,7 +143,6 @@ async fn handle_login(
     tx: &mut mpsc::Sender<DatabaseRequest>,
 ) -> tokio::io::Result<String> {
     let packet = connection.read().await?;
-    dbg!(&packet);
     if let Packet::RequestPacket(request) = packet {
         match request {
             Request::Login { user } => {
@@ -83,13 +152,11 @@ async fn handle_login(
                     name: user.clone(),
                     responder: resp_tx,
                 };
-                let db_response = tx.send(req).await;
-                dbg!(&db_response);
+                tx.send(req).await.unwrap();
                 let response = resp_rx.await;
-                dbg!(&response);
                 let response = response.unwrap();
-                let user = response.ok_or(tokio::io::Error::new(
-                    tokio::io::ErrorKind::NotFound,
+                let user = response.unwrap().ok_or(tokio::io::Error::new(
+                    ErrorKind::NotFound,
                     "no such error found",
                 ))?;
                 Ok(user.name)
@@ -121,7 +188,7 @@ async fn handle_client(
                     Request::Login { user: _ } => {
                         dbg!("duplicate login detected!");
                         connection.send(Packet::Error).await.unwrap();
-                        break; //relogin, no
+                        break; //re-login, no
                     }
                     Request::WhoAmI => {
                         connection
@@ -131,13 +198,27 @@ async fn handle_client(
                     }
                     Request::WagerData => {
                         let (db_tx, db_rx) = oneshot::channel();
-                        tx.send(DatabaseRequest::GetWagerInfo { responder: db_tx })
+                        tx.send(DatabaseRequest::GetAllWagerInfo { responder: db_tx })
                             .await
                             .unwrap();
                         let response = db_rx.await.unwrap();
                         if let Ok(wager_info) = response {
                             connection
                                 .send(Packet::ResponsePacket(Response::WagerData(wager_info)))
+                                .await
+                                .unwrap();
+                        } else {
+                            connection.send(Packet::Error).await.unwrap();
+                        }
+                    }
+                    Request::ResolveWager {
+                        wager_id,
+                        winning_option_id,
+                    } => {
+                        let result = resolve_wager(tx.clone(), wager_id, winning_option_id).await;
+                        if let Ok(()) = result {
+                            connection
+                                .send(Packet::ResponsePacket(Response::None))
                                 .await
                                 .unwrap();
                         } else {

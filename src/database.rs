@@ -111,6 +111,7 @@ pub struct WagerInfo {
     pub id: Thing,
     pub name: String,
     pub description: String,
+    pub pot: u64,
     pub options: Vec<WagerOptionInfo>,
 }
 
@@ -125,6 +126,7 @@ pub struct WagerOptionInfo {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct BetInfo {
     pub id: Thing,
+    pub user: Thing,
     pub val: u64,
 }
 
@@ -217,19 +219,22 @@ impl DatabaseConnection {
     pub async fn remove_bet(&mut self, bet_id: &Thing) -> Result<()> {
         let bet: Bet = self.connection.select(bet_id).await?.unwrap();
         self.connection
+            .query(BeginStatement)
             .query("UPDATE $wager_option SET bets = array::remove(array::find_index($id));")
-            .bind(("id", bet_id.clone()))
-            .bind(("wager_option", bet.wager_option.clone()))
+            .bind(("id", &bet.id))
+            .bind(("wager_option", &bet.wager_option))
+            .query("UPDATE $user SET balance += $val;")
+            .bind(("user", &bet.user))
+            .bind(("val", &bet.val))
+            .query("DELETE $bet;")
+            .bind(("bet", &bet.id))
+            .query(CommitStatement)
             .await?;
-        let mut user: User = self.connection.select(&bet.user).await?.unwrap();
-        user.balance += bet.val;
-        let _: Option<User> = self.connection.update(&bet.user).content(user).await?;
-        let _: Option<Bet> = self.connection.delete(bet_id).await?;
 
         Ok(())
     }
 
-    pub async fn get_user(&mut self, name: &str) -> Result<Option<User>> {
+    pub async fn get_user(&self, name: &str) -> Result<Option<User>> {
         self.connection.select(("user", name)).await
     }
 
@@ -245,12 +250,12 @@ impl DatabaseConnection {
             .take(0)
     }
 
-    pub async fn get_all_wagers(&mut self) -> Result<Vec<Wager>> {
+    pub async fn get_all_wagers(&self) -> Result<Vec<Wager>> {
         self.connection.select("wager").await
     }
 
     pub async fn get_all_wager_options_for_wager(
-        &mut self,
+        &self,
         wager_id: &str,
     ) -> Result<Vec<WagerOption>> {
         let constructed_id = Thing {
@@ -264,7 +269,7 @@ impl DatabaseConnection {
             .take(0)
     }
 
-    pub async fn get_all_bets_for_wager_option(&mut self, option_id: &str) -> Result<Vec<Bet>> {
+    pub async fn get_all_bets_for_wager_option(&self, option_id: &str) -> Result<Vec<Bet>> {
         let constructed_id = Thing {
             tb: "bet".into(),
             id: option_id.into(),
@@ -276,13 +281,28 @@ impl DatabaseConnection {
             .take(0)
     }
 
-    pub async fn get_all_bet_info(&mut self) -> Result<Vec<WagerInfo>> {
+    pub async fn get_all_bet_info(&self) -> Result<Vec<WagerInfo>> {
         let mut response = self
             .connection
             .query("SELECT * FROM wager FETCH options, options.bets")
             .await?;
-        let result = response.take(0);
-        dbg!(&result);
-        result
+        response.take(0)
+    }
+
+    pub async fn get_info_for_wager(&self, wager_id: Thing) -> Result<Option<WagerInfo>> {
+        assert_eq!(wager_id.tb, "wager");
+        let mut response = self.connection.query("SELECT * FROM wager WHERE id = $id FETCH options, options.bets")
+            .bind(("id", &wager_id))
+            .await?;
+        response.take(0)
+    }
+
+    pub async fn provide_payout_for_bet(&mut self, bet_info: &BetInfo, winning_ratio: f64) -> Result<()> {
+        self.connection.query("UPDATE $winner SET balance += $bet_value * $winning_ratio")
+            .bind(("winner", &bet_info.user))
+            .bind(("bet_value", &bet_info.val))
+            .bind(("winning_ratio", winning_ratio))
+            .await?;
+        Ok(())
     }
 }

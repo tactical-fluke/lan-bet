@@ -35,4 +35,18 @@ async fn main() {
         .unwrap();
     let response = connection.read().await;
     dbg!(&response);
+
+    match response.unwrap() {
+        Packet::ResponsePacket(response) => {
+            if let Response::WagerData(data) = response {
+                let resolved_bet = data.first().unwrap();
+                let winning_option = resolved_bet.options.first().unwrap();
+                connection.send(Packet::RequestPacket(Request::ResolveWager { 
+                    wager_id: resolved_bet.id.clone(), 
+                    winning_option_id: winning_option.id.clone() 
+                })).await.unwrap();
+            } else {}
+        },
+        _ => {}
+    }
 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
+use surrealdb::sql::Thing;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -9,9 +10,10 @@ const BUFFER_LIMIT: usize = 1048576;
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum Request {
-    Login { user: String },
+    Login { user: String }, // None response
     WhoAmI,
     WagerData,
+    ResolveWager{ wager_id: Thing, winning_option_id: Thing }, //None response
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -53,7 +55,7 @@ impl Connection {
                     Ok(req) => {
                         self.buf.drain(..parse_cursor);
                         self.cursor = parse_cursor - self.cursor;
-                        return tokio::io::Result::Ok(req);
+                        return Ok(req);
                     }
                     Err(_) => {
                         last_error =

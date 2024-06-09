@@ -1,9 +1,9 @@
+use anyhow::{bail, Result};
 use lan_bet::database::*;
 use lan_bet::network::*;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use surrealdb::sql::Thing;
-use surrealdb::Result;
 use tokio::join;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -35,6 +35,13 @@ struct DatabaseManager {
     work_queue: mpsc::Receiver<DatabaseRequest>,
 }
 
+pub fn transform_err<T>(error: surrealdb::Result<T>) -> Result<T> {
+    match error {
+        Ok(t) => Ok(t),
+        Err(e) => Err(e.into())
+    }
+}
+
 impl DatabaseManager {
     pub fn new(
         db_connection: DatabaseConnection,
@@ -50,15 +57,15 @@ impl DatabaseManager {
         while let Some(request) = self.work_queue.recv().await {
             match request {
                 DatabaseRequest::GetUser { name, responder } => {
-                    let resp = self.db_connection.get_user(&name).await;
+                    let resp = transform_err(self.db_connection.get_user(&name).await);
                     let _ = responder.send(resp);
                 }
                 DatabaseRequest::GetAllWagerInfo { responder } => {
-                    let resp = self.db_connection.get_all_bet_info().await;
+                    let resp = transform_err(self.db_connection.get_all_bet_info().await);
                     let _ = responder.send(resp);
                 }
                 DatabaseRequest::GetWagerInfo { id, responder } => {
-                    let resp = self.db_connection.get_info_for_wager(id).await;
+                    let resp = transform_err(self.db_connection.get_info_for_wager(id).await);
                     let _ = responder.send(resp);
                 }
                 DatabaseRequest::ProvidePayout {
@@ -70,7 +77,7 @@ impl DatabaseManager {
                         .db_connection
                         .provide_payout_for_bet(&bet_info, winning_ratio)
                         .await;
-                    let _ = responder.send(resp);
+                    let _ = responder.send(transform_err(resp));
                 }
             }
         }
@@ -90,6 +97,7 @@ struct WagerManager {
     database_requester: mpsc::Sender<DatabaseRequest>,
 }
 
+//NOTE: No functions in this impl may crash
 impl WagerManager {
     pub fn new(
         work_queue: mpsc::Receiver<WagerRequest>,
@@ -109,25 +117,28 @@ impl WagerManager {
                     winning_option,
                     responder,
                 } => {
+                    // we do not care if the receiver has already disappeared
                     responder
-                        .send(self.resolve_wager(wager_id, winning_option).await)
-                        .unwrap();
+                        .send(self.resolve_wager(wager_id, winning_option).await).ok();
                 }
             }
         }
     }
 
-    async fn resolve_wager(&mut self, wager_id: Thing, winning_option_id: Thing) -> Result<()> {
+    async fn resolve_wager(
+        &mut self,
+        wager_id: Thing,
+        winning_option_id: Thing,
+    ) -> Result<()> {
         let (wager_tx, wager_rx) = oneshot::channel();
         self.database_requester
             .send(DatabaseRequest::GetWagerInfo {
                 id: wager_id,
                 responder: wager_tx,
             })
-            .await
-            .unwrap();
+            .await?;
 
-        let wager_info = wager_rx.await.unwrap()?.unwrap();
+        let wager_info = wager_rx.await??.ok_or(anyhow::Error::msg("invalid wager"))?;
         let mut wager_total_map = HashMap::new();
         for option in &wager_info.options {
             let total: u64 = option.bets.iter().map(|bet| bet.val).sum();
@@ -137,13 +148,13 @@ impl WagerManager {
         let abs_total: u64 =
             wager_total_map.iter().map(|(_, value)| value).sum::<u64>() + wager_info.pot;
         let winning_ratio =
-            abs_total as f64 / *wager_total_map.get(&winning_option_id).unwrap() as f64;
+            abs_total as f64 / *wager_total_map.get(&winning_option_id).ok_or(anyhow::Error::msg("invalid wager totals"))? as f64;
 
         let winning_bets = &wager_info
             .options
             .iter()
             .find(|option| option.id == winning_option_id)
-            .unwrap()
+            .ok_or(anyhow::Error::msg("no winning bets"))?
             .bets;
 
         for winning_bet in winning_bets {
@@ -154,9 +165,8 @@ impl WagerManager {
                     winning_ratio,
                     responder: payout_tx,
                 })
-                .await
-                .unwrap();
-            payout_rx.await.unwrap()?;
+                .await?;
+            payout_rx.await??;
         }
         Ok(())
     }
@@ -190,7 +200,10 @@ async fn main() {
     res3.unwrap();
 }
 
-async fn hande_listen_server(db_tx: mpsc::Sender<DatabaseRequest>, wager_tx: mpsc::Sender<WagerRequest>) {
+async fn hande_listen_server(
+    db_tx: mpsc::Sender<DatabaseRequest>,
+    wager_tx: mpsc::Sender<WagerRequest>,
+) {
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
     loop {
@@ -216,8 +229,12 @@ async fn handle_connection(
             .send(Packet::ResponsePacket(Response::None))
             .await
             .unwrap();
-        dbg!("moving to handle client");
-        handle_client(username, connection, db_tx, wager_tx).await;
+        match handle_client(username, &mut connection, db_tx, wager_tx).await {
+            Ok(()) => {},
+            Err(_) => {
+                connection.send(Packet::Error).await.unwrap();
+            }
+        }
     } else {
         connection.send(Packet::Error).await.unwrap();
     }
@@ -226,7 +243,7 @@ async fn handle_connection(
 async fn handle_login(
     connection: &mut Connection,
     db_tx: &mut mpsc::Sender<DatabaseRequest>,
-) -> tokio::io::Result<String> {
+) -> Result<String> {
     let packet = connection.read().await?;
     if let Packet::RequestPacket(request) = packet {
         match request {
@@ -238,94 +255,89 @@ async fn handle_login(
                     responder: resp_tx,
                 };
                 db_tx.send(req).await.unwrap();
-                let response = resp_rx.await;
-                let response = response.unwrap();
-                let user = response.unwrap().ok_or(tokio::io::Error::new(
+                let response = resp_rx.await?;
+                let user = response?.ok_or(std::io::Error::new(
                     ErrorKind::NotFound,
-                    "no such error found",
+                    "no such user found",
                 ))?;
                 Ok(user.name)
             }
             _ => {
-                let error = tokio::io::Error::new(ErrorKind::Other, "bad login");
-                Err(error)
+                bail!("bad login");
             }
         }
     } else {
-        Err(tokio::io::Error::new(
-            ErrorKind::InvalidData,
-            "invalid request at login",
-        ))
+        bail!("Invalid request at login: {:?}", packet);
     }
 }
 
 async fn handle_client(
     username: String,
-    mut connection: Connection,
+    connection: &mut Connection,
     db_tx: mpsc::Sender<DatabaseRequest>,
     wager_tx: mpsc::Sender<WagerRequest>,
-) {
+) -> Result<()> {
     loop {
         let packet = connection.read().await;
         dbg!(&packet);
-        if let Ok(packet) = packet {
-            if let Packet::RequestPacket(request) = packet {
-                match request {
-                    Request::Login { user: _ } => {
-                        dbg!("duplicate login detected!");
-                        connection.send(Packet::Error).await.unwrap();
-                        break; //re-login, no
-                    }
-                    Request::WhoAmI => {
+        if let Ok(Packet::RequestPacket(request)) = packet {
+            match request {
+                Request::Login { user: _ } => {
+                    dbg!("duplicate login detected!");
+                    connection.send(Packet::Error).await.unwrap();
+                    bail!("Attempted re-login - denied");
+                }
+                Request::WhoAmI => {
+                    connection
+                        .send(Packet::ResponsePacket(Response::WhoAmI(username.clone())))
+                        .await?;
+                }
+                Request::WagerData => {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    db_tx
+                        .send(DatabaseRequest::GetAllWagerInfo { responder: resp_tx })
+                        .await?;
+                    let response = resp_rx.await?;
+                    if let Ok(wager_info) = response {
                         connection
-                            .send(Packet::ResponsePacket(Response::WhoAmI(username.clone())))
-                            .await
-                            .unwrap();
+                            .send(Packet::ResponsePacket(Response::WagerData(wager_info)))
+                            .await?;
+                    } else {
+                        connection.send(Packet::Error).await?;
                     }
-                    Request::WagerData => {
-                        let (resp_tx, resp_rx) = oneshot::channel();
-                        db_tx
-                            .send(DatabaseRequest::GetAllWagerInfo { responder: resp_tx })
-                            .await
-                            .unwrap();
-                        let response = resp_rx.await.unwrap();
-                        if let Ok(wager_info) = response {
-                            connection
-                                .send(Packet::ResponsePacket(Response::WagerData(wager_info)))
-                                .await
-                                .unwrap();
-                        } else {
-                            connection.send(Packet::Error).await.unwrap();
-                        }
-                    }
-                    Request::ResolveWager {
-                        wager_id,
-                        winning_option_id,
-                    } => {
-                        let (resp_tx, resp_rx) = oneshot::channel();
-                        wager_tx
-                            .send(WagerRequest::ResolveWager {
-                                wager_id,
-                                winning_option: winning_option_id,
-                                responder: resp_tx,
-                            })
-                            .await
-                            .unwrap();
-                        let result = resp_rx.await.unwrap();
-                        if let Ok(()) = result {
-                            connection
-                                .send(Packet::ResponsePacket(Response::None))
-                                .await
-                                .unwrap();
-                        } else {
-                            connection.send(Packet::Error).await.unwrap();
-                        }
+                }
+                Request::ResolveWager {
+                    wager_id,
+                    winning_option_id,
+                } => {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    wager_tx
+                        .send(WagerRequest::ResolveWager {
+                            wager_id,
+                            winning_option: winning_option_id,
+                            responder: resp_tx,
+                        })
+                        .await?;
+                    let result = resp_rx.await?;
+                    if let Ok(()) = result {
+                        connection
+                            .send(Packet::ResponsePacket(Response::None))
+                            .await?;
+                    } else {
+                        connection.send(Packet::Error).await?;
                     }
                 }
             }
         } else {
-            eprintln!("{:?}", packet);
-            break;
+            return match packet {
+                Ok(pack) => bail!("incorrect packet type: {:?}", pack),
+                Err(error) => {
+                    match &error.kind() {
+                        ErrorKind::ConnectionAborted => Ok(()), //connection aborted is considered successful,
+                        _ => Err(error)?
+                    }
+                }
+            };
         }
     }
 }

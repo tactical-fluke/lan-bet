@@ -9,6 +9,7 @@ use surrealdb::{
 
 use surrealdb::sql::statements::BeginStatement;
 use surrealdb::sql::statements::CommitStatement;
+use common::{BetInfo, WagerInfo, WagerOptionInfo};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Record {
@@ -36,6 +37,15 @@ impl User {
     }
 }
 
+impl Into<common::User> for User {
+    fn into(self) -> common::User {
+        common::User {
+            name: self.name,
+            balance: self.balance,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Wager {
     pub id: Thing,
@@ -55,6 +65,18 @@ impl Wager {
             name: name.into(),
             description: description.into(),
             pot,
+            options: vec![],
+        }
+    }
+}
+
+impl Into<common::WagerInfo> for Wager {
+    fn into(self) -> WagerInfo {
+        common::WagerInfo {
+            id: self.id.id.to_string(),
+            name: self.name,
+            description: self.description,
+            pot: self.pot,
             options: vec![],
         }
     }
@@ -84,6 +106,17 @@ impl WagerOption {
     }
 }
 
+impl Into<common::WagerOptionInfo> for WagerOption {
+    fn into(self) -> WagerOptionInfo {
+        common::WagerOptionInfo {
+            id: self.id.id.to_string(),
+            name: self.name,
+            description: self.description,
+            bets: vec![],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Bet {
     pub id: Thing,
@@ -106,28 +139,14 @@ impl Bet {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct WagerInfo {
-    pub id: Thing,
-    pub name: String,
-    pub description: String,
-    pub pot: u64,
-    pub options: Vec<WagerOptionInfo>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct WagerOptionInfo {
-    pub id: Thing,
-    pub name: String,
-    pub description: String,
-    pub bets: Vec<BetInfo>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct BetInfo {
-    pub id: Thing,
-    pub user: Thing,
-    pub val: u64,
+impl Into<common::BetInfo> for Bet {
+    fn into(self) -> BetInfo {
+        common::BetInfo {
+            id: self.id.id.to_string(),
+            user_id: self.id.id.to_string(),
+            val: self.val,
+        }
+    }
 }
 
 pub struct DatabaseConnection {
@@ -281,7 +300,7 @@ impl DatabaseConnection {
             .take(0)
     }
 
-    pub async fn get_all_bet_info(&self) -> Result<Vec<WagerInfo>> {
+    pub async fn get_all_bet_info(&self) -> Result<Vec<common::WagerInfo>> {
         let mut response = self
             .connection
             .query("SELECT * FROM wager FETCH options, options.bets")
@@ -289,7 +308,7 @@ impl DatabaseConnection {
         response.take(0)
     }
 
-    pub async fn get_info_for_wager(&self, wager_id: Thing) -> Result<Option<WagerInfo>> {
+    pub async fn get_info_for_wager(&self, wager_id: Thing) -> Result<Option<common::WagerInfo>> {
         assert_eq!(wager_id.tb, "wager");
         let mut response = self.connection.query("SELECT * FROM wager WHERE id = $id FETCH options, options.bets")
             .bind(("id", &wager_id))
@@ -297,9 +316,13 @@ impl DatabaseConnection {
         response.take(0)
     }
 
-    pub async fn provide_payout_for_bet(&mut self, bet_info: &BetInfo, winning_ratio: f64) -> Result<()> {
+    pub async fn provide_payout_for_bet(&mut self, bet_info: &common::BetInfo, winning_ratio: f64) -> Result<()> {
+        let user_id = Thing {
+            tb: "user".into(),
+            id: Id::String(bet_info.user_id.clone())
+        };
         self.connection.query("UPDATE $winner SET balance += $bet_value * $winning_ratio")
-            .bind(("winner", &bet_info.user))
+            .bind(("winner", user_id))
             .bind(("bet_value", &bet_info.val))
             .bind(("winning_ratio", winning_ratio))
             .await?;

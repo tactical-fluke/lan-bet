@@ -511,6 +511,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rmp-serde",
+ "serde",
+ "surrealdb",
+ "tokio",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1350,17 +1361,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "507460a910eb7b32ee961886ff48539633b788a36b65692b95f225b844c82553"
 dependencies = [
  "regex-automata",
-]
-
-[[package]]
-name = "lan-bet"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rmp-serde",
- "serde",
- "surrealdb",
- "tokio",
 ]
 
 [[package]]
@@ -2506,6 +2506,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.63",
+]
+
+[[package]]
+name = "server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common",
+ "rmp-serde",
+ "serde",
+ "surrealdb",
+ "tokio",
 ]
 
 [[package]]

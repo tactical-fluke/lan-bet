@@ -20,7 +20,7 @@ pub enum Request {
 pub enum Response {
     None,
     WhoAmI(String),
-    WagerData(Vec<crate::database::WagerInfo>),
+    WagerData(Vec<common::WagerInfo>),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]

@@ -1,9 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-
-const BUFFER_LIMIT: usize = 1048576;
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -16,6 +12,7 @@ pub enum Request {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum Response {
     None,
+    SuccessfulLogin{username: String, balance: u64},
     WhoAmI(String),
     WagerData(Vec<crate::Wager>),
 }
@@ -28,62 +25,122 @@ pub enum Packet {
 }
 
 pub struct Connection {
-    connection: TcpStream,
-    buf: Vec<u8>,
-    cursor: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    connection: not_wasm::TungsteniteWebSocket,
+    #[cfg(target_arch = "wasm32")]
+    connection: wasm::WasmWebSocket,
 }
 
 impl Connection {
-    pub fn from_tcp_stream(connection: TcpStream) -> Self {
-        Self {
-            connection,
-            buf: vec![0; 4096],
-            cursor: 0,
-        }
+    pub async fn from_tcp_stream(connection: TcpStream) -> anyhow::Result<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let ws = not_wasm::TungsteniteWebSocket::new(connection).await?;
+
+        #[cfg(target_arch = "wasm32")]
+        let ws = wasm::WasmWebSocket::new("")?;
+
+        Ok(Self {
+            connection: ws,
+        })
     }
 
-    pub async fn read(&mut self) -> tokio::io::Result<Packet> {
-        let mut last_error = tokio::io::Error::new(ErrorKind::Other, "");
-        let mut parse_cursor = self.cursor;
-        loop {
-            while parse_cursor <= self.cursor {
-                let res = rmp_serde::from_slice(&self.buf[..parse_cursor]);
-                match res {
-                    Ok(req) => {
-                        self.buf.drain(..parse_cursor);
-                        self.cursor = parse_cursor - self.cursor;
-                        return Ok(req);
-                    }
-                    Err(_) => {
-                        last_error =
-                            tokio::io::Error::new(ErrorKind::InvalidData, "malformed request")
-                    }
-                }
-                parse_cursor += 1;
-            }
-
-            self.grow_buffer_if_needed();
-            if self.buf.len() >= BUFFER_LIMIT {
-                return Err(last_error);
-            }
-            let n = self.connection.read(&mut self.buf[self.cursor..]).await?;
-            if n == 0 {
-                let e = tokio::io::Error::new(ErrorKind::ConnectionAborted, "connection closed");
-                return Err(e);
-            }
-            self.cursor += n;
-        }
+    pub async fn read(&mut self) -> anyhow::Result<Packet> {
+        Ok(rmp_serde::from_slice(&self.connection.read().await?)?)
     }
 
-    pub async fn send(&mut self, data: Packet) -> tokio::io::Result<()> {
+    pub async fn send(&mut self, data: Packet) -> anyhow::Result<()> {
         self.connection
             .write_all(&rmp_serde::to_vec(&data).unwrap())
             .await
     }
+}
 
-    fn grow_buffer_if_needed(&mut self) {
-        if self.buf.len() == self.cursor {
-            self.buf.resize(self.buf.len() * 2, 0);
+trait WebSocketConnection {
+    async fn read<'a>(&'a mut self) -> anyhow::Result<Vec<u8>>;
+
+    async fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> anyhow::Result<()>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod not_wasm{
+    use anyhow::bail;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpStream;
+    use tokio_tungstenite::tungstenite::Message;
+    use crate::network::WebSocketConnection;
+
+    pub struct TungsteniteWebSocket {
+        socket: tokio_tungstenite::WebSocketStream<TcpStream>,
+    }
+    
+    impl TungsteniteWebSocket {
+        pub async fn new(stream: TcpStream) -> anyhow::Result<Self> {
+            let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+            Ok(Self { socket: ws_stream })
+        }
+    }
+    
+    impl WebSocketConnection for TungsteniteWebSocket {
+        async fn read<'a>(&'a mut self) -> anyhow::Result<Vec<u8>> {
+            let message = self.socket.next().await.ok_or(anyhow::anyhow!("some error"))??;
+            match message {
+                Message::Binary(data) => {
+                    Ok(data)
+                }
+                _ => {
+                    bail!("incorrect data type received")
+                }
+            }
+        }
+    
+        async fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> anyhow::Result<()> {
+            Ok(self.socket.send(Message::Binary(buf.to_vec())).await?)
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use std::future::Future;
+    use std::task::Poll;
+    use wasm_bindgen::prelude::*;
+    use web_sys::{BinaryType, js_sys, MessageEvent, WebSocket};
+    use crate::network:: WebSocketConnection;
+
+    pub struct WasmWebSocket {
+        socket: WebSocket,
+        message_sender: async_channel::Sender<Vec<u8>>,
+        message_receiver: async_channel::Receiver<Vec<u8>>,
+    }
+
+    impl WasmWebSocket {
+        pub fn new(address: &str) -> anyhow::Result<Self> {
+            let mut socket = WebSocket::new(address)?;
+            socket.set_binary_type(BinaryType::Arraybuffer);
+            let (message_sender, message_receiver) = async_channel::unbounded();
+            
+            let tx = message_sender.clone();
+            let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+                if let Ok(buf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
+                    let array: Vec<u8> = buf.into();
+                    let fut = tx.send(array);
+                    while Poll::Pending = fut.poll() {}
+                } else {}
+            });
+            socket.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+            onmessage_callback.forget();
+            Ok(WasmWebSocket{ socket, message_receiver, message_sender })
+        }
+    }
+    
+    impl WebSocketConnection for WasmWebSocket {
+        async fn read<'a>(&'a mut self) -> anyhow::Result<Vec<u8>> {
+            Ok(self.message_receiver.recv().await?)
+        }
+
+        async fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> anyhow::Result<()> {
+            self.socket.send_with_u8_array(buf)?;
+            Ok(())
         }
     }
 }

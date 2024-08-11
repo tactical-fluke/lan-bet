@@ -147,20 +147,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81953c529336010edd6d8e358f886d9581267795c61b19475b71314bffa46d35"
 dependencies = [
  "concurrent-queue",
- "event-listener 2.5.3",
+ "event-listener",
  "futures-core",
-]
-
-[[package]]
-name = "async-channel"
-version = "2.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89b47800b0be77592da0afd425cc03468052844aff33b84e33cc696f64e77b6a"
-dependencies = [
- "concurrent-queue",
- "event-listener-strategy",
- "futures-core",
- "pin-project-lite",
 ]
 
 [[package]]
@@ -550,14 +538,13 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-channel 2.3.1",
+ "futures",
  "futures-util",
+ "gloo 0.11.0",
  "rmp-serde",
  "serde",
  "tokio",
  "tokio-tungstenite 0.23.0",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -805,27 +792,6 @@ name = "event-listener"
 version = "2.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
-
-[[package]]
-name = "event-listener"
-version = "5.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6032be9bd27023a771701cc49f9f053c751055f71efb2e0ae5c15809093675ba"
-dependencies = [
- "concurrent-queue",
- "parking",
- "pin-project-lite",
-]
-
-[[package]]
-name = "event-listener-strategy"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f214dc438f977e6d4e3500aaa277f5ad94ca83fbbd9b1a15713ce2344ccc5a1"
-dependencies = [
- "event-listener 5.3.1",
- "pin-project-lite",
-]
 
 [[package]]
 name = "fastrand"
@@ -1158,6 +1124,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "gloo"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d15282ece24eaf4bd338d73ef580c6714c8615155c4190c781290ee3fa0fd372"
+dependencies = [
+ "gloo-console 0.3.0",
+ "gloo-dialogs 0.2.0",
+ "gloo-events 0.2.0",
+ "gloo-file 0.3.0",
+ "gloo-history 0.2.2",
+ "gloo-net 0.5.0",
+ "gloo-render 0.2.0",
+ "gloo-storage 0.3.0",
+ "gloo-timers 0.3.0",
+ "gloo-utils 0.2.0",
+ "gloo-worker 0.5.0",
+]
+
+[[package]]
 name = "gloo-console"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1323,6 +1308,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "gloo-net"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43aaa242d1239a8822c15c645f02166398da4f8b5c4bae795c1f5b44e9eee173"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-sink",
+ "gloo-utils 0.2.0",
+ "http 0.2.12",
+ "js-sys",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "gloo-render"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1440,6 +1446,25 @@ name = "gloo-worker"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76495d3dd87de51da268fa3a593da118ab43eb7f8809e17eb38d3319b424e400"
+dependencies = [
+ "bincode",
+ "futures",
+ "gloo-utils 0.2.0",
+ "gloo-worker-macros",
+ "js-sys",
+ "pinned",
+ "serde",
+ "thiserror",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "gloo-worker"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "085f262d7604911c8150162529cefab3782e91adb20202e8658f7275d2aefe5d"
 dependencies = [
  "bincode",
  "futures",
@@ -3264,7 +3289,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d8bb7301422b4b0945aef848285073fa95c1e1412a0952dbdc50917104c26d2"
 dependencies = [
- "async-channel 1.9.0",
+ "async-channel",
  "bincode",
  "chrono",
  "dmp",
@@ -3306,7 +3331,7 @@ dependencies = [
  "addr",
  "any_ascii",
  "argon2",
- "async-channel 1.9.0",
+ "async-channel",
  "async-executor",
  "async-recursion",
  "base64 0.21.7",

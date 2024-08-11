@@ -1,9 +1,8 @@
-use chrono::{DateTime, Local};
-use futures::{Stream, StreamExt};
-use yew::platform::pinned::mpsc::UnboundedSender;
+use std::time::Duration;
 use yew::platform::spawn_local;
-use yew::platform::time::{interval, sleep};
-use yew::{AttrValue, Callback};
+use yew::platform::time::sleep;
+use yew::Callback;
+use common::network::Packet;
 
 
 pub fn query_wager_info(mut connection: common::network::Connection, data_callback: Callback<Vec<common::Wager>>) {
@@ -12,10 +11,21 @@ pub fn query_wager_info(mut connection: common::network::Connection, data_callba
         loop {
             connection.send(Packet::RequestPacket(Request::WagerData)).await.unwrap();
             let response = connection.read().await.unwrap();
-            if let Response::WagerData(wager_data) = response{
+            if let Packet::ResponsePacket(Response::WagerData(wager_data)) = response {
                 data_callback.emit(wager_data)
             }
             sleep(std::time::Duration::from_secs(1)).await;
         }
     });
+}
+
+pub fn generate_new_num(num_callback: Callback<i32>) {
+    spawn_local(async move {
+        let mut val = 1;
+        loop {
+            num_callback.emit(val);
+            sleep(Duration::from_secs(2)).await;
+            val += 1;
+        }
+    })
 }

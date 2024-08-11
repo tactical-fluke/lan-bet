@@ -2,13 +2,42 @@ mod services;
 
 use yew::prelude::*;
 
-enum ClientStatus {
-    NotLoggedIn,
-    LoggedIn,
+struct LanBetView {
+    num: Option<i32>,
 }
 
-struct WagerView {
-    
+pub enum LanBetViewMessage {
+    NewNum(i32),
+}
+
+impl Component for LanBetView {
+    type Message = LanBetViewMessage;
+    type Properties = ();
+
+    fn create(ctx: &Context<Self>) -> Self {
+        let num_cb = ctx.link().callback(LanBetViewMessage::NewNum);
+        services::generate_new_num(num_cb);
+        Self {
+            num: None,
+        }
+    }
+
+    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
+        match msg {
+            LanBetViewMessage::NewNum(new_num) => {
+                self.num = Some(new_num);
+                true
+            }
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Html {
+        html!(
+            <div>
+                {self.num.as_ref()}
+            </div>
+        )
+    }
 }
 
 #[function_component]
@@ -31,6 +60,5 @@ fn App() -> Html {
 }
 
 fn main() {
-    
-    yew::Renderer::<App>::new().render();
+    yew::Renderer::<LanBetView>::new().render();
 }

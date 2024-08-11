@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpStream;
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
@@ -32,15 +34,19 @@ pub struct Connection {
 }
 
 impl Connection {
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn from_tcp_stream(connection: TcpStream) -> anyhow::Result<Self> {
-        #[cfg(not(target_arch = "wasm32"))]
         let ws = not_wasm::TungsteniteWebSocket::new(connection).await?;
-
-        #[cfg(target_arch = "wasm32")]
-        let ws = wasm::WasmWebSocket::new("")?;
 
         Ok(Self {
             connection: ws,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn connect(address: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            connection: wasm::WasmWebSocket::new(address)?
         })
     }
 
@@ -101,46 +107,36 @@ mod not_wasm{
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::future::Future;
-    use std::task::Poll;
-    use wasm_bindgen::prelude::*;
-    use web_sys::{BinaryType, js_sys, MessageEvent, WebSocket};
-    use crate::network:: WebSocketConnection;
+    use gloo::net::websocket::futures::WebSocket;
+    use crate::network::WebSocketConnection;
+    use futures::{SinkExt, StreamExt};
+    use gloo::net::websocket::Message;
 
     pub struct WasmWebSocket {
         socket: WebSocket,
-        message_sender: async_channel::Sender<Vec<u8>>,
-        message_receiver: async_channel::Receiver<Vec<u8>>,
     }
 
     impl WasmWebSocket {
         pub fn new(address: &str) -> anyhow::Result<Self> {
-            let mut socket = WebSocket::new(address)?;
-            socket.set_binary_type(BinaryType::Arraybuffer);
-            let (message_sender, message_receiver) = async_channel::unbounded();
-            
-            let tx = message_sender.clone();
-            let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
-                if let Ok(buf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
-                    let array: Vec<u8> = buf.into();
-                    let fut = tx.send(array);
-                    while Poll::Pending = fut.poll() {}
-                } else {}
-            });
-            socket.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-            onmessage_callback.forget();
-            Ok(WasmWebSocket{ socket, message_receiver, message_sender })
+            let socket = WebSocket::open(address).unwrap();
+            Ok(Self {
+                socket
+            })
         }
     }
     
     impl WebSocketConnection for WasmWebSocket {
         async fn read<'a>(&'a mut self) -> anyhow::Result<Vec<u8>> {
-            Ok(self.message_receiver.recv().await?)
+            let message = self.socket.next().await.unwrap()?;
+            if let Message::Bytes(data) = message {
+                Ok(data)
+            } else {
+                Ok(vec![])
+            }
         }
 
         async fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> anyhow::Result<()> {
-            self.socket.send_with_u8_array(buf)?;
-            Ok(())
+            Ok(self.socket.send(Message::Bytes(Vec::from(buf))).await?)
         }
     }
 }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
 use surrealdb::opt::auth::Root;
 use surrealdb::sql::{Id, Thing};
 use surrealdb::Surreal;
@@ -9,6 +10,13 @@ use surrealdb::{
 
 use surrealdb::sql::statements::BeginStatement;
 use surrealdb::sql::statements::CommitStatement;
+
+pub const TABLE_USER: &str = "user";
+pub const TABLE_WAGER: &str = "wager";
+pub const TABLE_WAGER_OPTION: &str = "wager_option";
+pub const TABLE_BET: &str = "bet";
+
+const GET_BY_NAME_QUERY: &str = "SELECT * FROM $table WHERE name = $name";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Record {
@@ -27,7 +35,7 @@ impl DbUser {
     pub fn new(name: impl Into<String> + Clone, balance: u64) -> Self {
         Self {
             id: Thing {
-                tb: "user".into(),
+                tb: TABLE_USER.into(),
                 id: Id::String(name.clone().into()),
             },
             name: name.into(),
@@ -58,7 +66,7 @@ impl DbWager {
     pub fn new(name: impl Into<String>, description: impl Into<String>, pot: u64) -> Self {
         Self {
             id: Thing {
-                tb: "wager".into(),
+                tb: TABLE_WAGER.into(),
                 id: Id::rand(),
             },
             name: name.into(),
@@ -100,7 +108,7 @@ impl DbWagerOption {
     pub fn new(name: impl Into<String>, description: impl Into<String>, wager: Thing) -> Self {
         Self {
             id: Thing {
-                tb: "wager_option".into(),
+                tb: TABLE_WAGER_OPTION.into(),
                 id: Id::rand(),
             },
             name: name.into(),
@@ -134,7 +142,7 @@ impl DbBet {
     pub fn new(user: Thing, wager_option: Thing, val: u64) -> Self {
         Self {
             id: Thing {
-                tb: "bet".into(),
+                tb: TABLE_BET.into(),
                 id: Id::rand(),
             },
             user,
@@ -174,31 +182,27 @@ impl DatabaseConnection {
         Some(Self { connection: db })
     }
 
-    pub async fn add_user(&mut self, user: &DbUser) -> Result<()> {
-        let _: Option<Record> = self
+    pub async fn add_user(&mut self, user: &DbUser) -> Result<Option<Record>> {
+        Ok(self
             .connection
-            .create(("user", &user.name))
+            .create(("user", user.id.clone()))
             .content(user)
-            .await?;
-
-        Ok(())
+            .await?)
     }
 
-    pub async fn add_wager(&mut self, wager: &DbWager) -> Result<()> {
-        let _: Vec<Record> = self.connection.create("wager").content(wager).await?;
-
-        Ok(())
+    pub async fn add_wager(&mut self, wager: &DbWager) -> Result<Option<Record>> {
+        Ok(self.connection.create((TABLE_WAGER, wager.id.clone())).content(wager).await?)
     }
 
-    pub async fn add_wager_option(&mut self, option: &common::WagerOption, wager_id: &str) -> Result<()> {
-        let wager_id = Thing{ tb: "wager".into(), id: Id::String(wager_id.into()) };
+    pub async fn add_wager_option(&mut self, option: &common::WagerOption, wager_id: &str) -> Result<Option<Record>> {
+        let wager_id = Thing{ tb: TABLE_WAGER.into(), id: Id::String(wager_id.into()) };
         let wager_option = DbWagerOption::new(&option.name, &option.description, wager_id);
 
         self.add_wager_option_db(&wager_option).await
     }
 
-    pub async fn add_wager_option_db(&mut self, option: &DbWagerOption) -> Result<()> {
-        self.connection
+    pub async fn add_wager_option_db(&mut self, option: &DbWagerOption) -> Result<Option<Record>> {
+        let mut response = self.connection
             .query(BeginStatement)
             .query("CREATE $id SET name = $name, description = $description, wager = $wager, bets = $bets")
             .bind(&option)
@@ -207,10 +211,11 @@ impl DatabaseConnection {
             .bind(("wager", &option.wager))
             .query(CommitStatement)
             .await?;
-        Ok(())
+
+        Ok(response.take(1)?)
     }
 
-    pub async fn add_bet(&mut self, bet: &common::Bet, wager_option_id: &str) -> Result<()> {
+    pub async fn add_bet(&mut self, bet: &common::Bet, wager_option_id: &str) -> Result<Option<Record>> {
         let wager_option_id = Thing{ tb: "wager_option".into(), id: Id::String(wager_option_id.into())};
         let user_id = Thing{ tb: "user".into(), id: Id::String(bet.user_id.clone())};
         let bet = DbBet::new(user_id, wager_option_id, bet.val);
@@ -218,17 +223,18 @@ impl DatabaseConnection {
         self.add_bet_db(&bet).await
     }
 
-    pub async fn add_bet_db(&mut self, bet: &DbBet) -> Result<()> {
-        self.connection
+    pub async fn add_bet_db(&mut self, bet: &DbBet) -> Result<Option<Record>> {
+        let mut response = self.connection
             .query(BeginStatement)
-            .query("CREATE $id SET user = $user, wager_option = $option, val = $val;")
+            .query("CREATE $id SET user = $user, wager_option = $wager_option, val = $val;")
             .bind(&bet)
             .query("UPDATE $wager_option SET bets = array::add($wager_option.bets, $id);")
             .bind(("id", &bet.id))
             .bind(("wager_option", &bet.wager_option))
             .query(CommitStatement)
             .await?;
-        Ok(())
+
+        Ok(response.take(1)?)
     }
 
     pub async fn remove_wager(&mut self, wager_id: &Thing) -> Result<()> {
@@ -273,18 +279,15 @@ impl DatabaseConnection {
         Ok(())
     }
 
-    pub async fn get_user(&self, name: &str) -> Result<Option<DbUser>> {
-        self.connection.select(("user", name)).await
+    pub async fn get_user_by_name(&self, name: &str) -> Result<Option<DbUser>> {
+        self.get_item_by_name(TABLE_USER, name).await
     }
 
-    pub async fn get_bets_by_user(&mut self, username: &str) -> Result<Vec<DbBet>> {
-        let constructed_id = Thing {
-            tb: "user".into(),
-            id: username.into(),
-        };
+    pub async fn get_bets_by_user(&mut self, name: &str) -> Result<Vec<DbBet>> {
         self.connection
-            .query("SELECT * from bet WHERE user = $user_id;")
-            .bind(("user_id", constructed_id))
+            .query("SELECT * FROM $table WHERE user = $name")
+            .bind(("table", TABLE_USER))
+            .bind(("name", name))
             .await?
             .take(0)
     }
@@ -293,12 +296,16 @@ impl DatabaseConnection {
         self.connection.select("wager").await
     }
 
+    pub async fn get_wager_by_name(&self, name: impl Into<&str>) -> Result<Option<DbWager>> {
+        self.get_item_by_name(TABLE_WAGER, name).await
+    }
+
     pub async fn get_all_wager_options_for_wager(
         &self,
         wager_id: &str,
     ) -> Result<Vec<DbWagerOption>> {
         let constructed_id = Thing {
-            tb: "wager".into(),
+            tb: TABLE_WAGER.into(),
             id: wager_id.into(),
         };
         self.connection
@@ -308,9 +315,13 @@ impl DatabaseConnection {
             .take(0)
     }
 
+    pub async fn get_wager_option_by_name(&self, name: impl Into<&str>) -> Result<Option<DbWagerOption>> {
+        self.get_item_by_name(TABLE_WAGER_OPTION, name).await
+    }
+
     pub async fn get_all_bets_for_wager_option(&self, option_id: &str) -> Result<Vec<DbBet>> {
         let constructed_id = Thing {
-            tb: "bet".into(),
+            tb: TABLE_BET.into(),
             id: option_id.into(),
         };
         self.connection
@@ -329,7 +340,7 @@ impl DatabaseConnection {
     }
 
     pub async fn get_info_for_wager(&self, wager_id: Thing) -> Result<Option<common::Wager>> {
-        assert_eq!(wager_id.tb, "wager");
+        assert_eq!(wager_id.tb, TABLE_WAGER);
         let mut response = self.connection.query("SELECT * FROM wager WHERE id = $id FETCH options, options.bets")
             .bind(("id", &wager_id))
             .await?;
@@ -338,7 +349,7 @@ impl DatabaseConnection {
 
     pub async fn provide_payout_for_bet(&mut self, bet_info: &common::Bet, winning_ratio: f64) -> Result<()> {
         let user_id = Thing {
-            tb: "user".into(),
+            tb: TABLE_USER.into(),
             id: Id::String(bet_info.user_id.clone())
         };
         self.connection.query("UPDATE $winner SET balance += $bet_value * $winning_ratio")
@@ -347,5 +358,14 @@ impl DatabaseConnection {
             .bind(("winning_ratio", winning_ratio))
             .await?;
         Ok(())
+    }
+
+    async fn get_item_by_name<Item: DeserializeOwned>(&self, table: impl Into<&str>, name: impl Into<&str>) -> Result<Option<Item>> {
+        self.connection
+            .query(GET_BY_NAME_QUERY)
+            .bind(("table", table.into()))
+            .bind(("name", name.into()))
+            .await?
+            .take(0)
     }
 }

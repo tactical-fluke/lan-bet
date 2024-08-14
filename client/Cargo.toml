@@ -9,3 +9,4 @@ web-sys = "0.3.69"
 chrono = "0.4.38"
 futures = "0.3.30"
 common = { path = "../common"}
+anyhow = "1.0.86"

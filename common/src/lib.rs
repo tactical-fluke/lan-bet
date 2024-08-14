@@ -16,6 +16,14 @@ pub struct Wager {
     pub options: Vec<WagerOption>,
 }
 
+// A potential, unrealised wager. To be used the creation of a new, fully realised wager
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
+pub struct PotentialWager {
+    pub name: String,
+    pub description: String,
+    pub pot: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct WagerOption {
     pub id: String,

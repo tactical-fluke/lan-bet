@@ -1,3 +1,4 @@
+use surrealdb::Connection;
 use surrealdb::sql::Thing;
 use tokio::sync::{mpsc, oneshot};
 use crate::database::{DatabaseConnection, DbUser};
@@ -23,8 +24,8 @@ pub enum DatabaseRequest {
     },
 }
 
-pub struct DatabaseManager {
-    db_connection: DatabaseConnection,
+pub struct DatabaseManager<Conn: Connection> {
+    db_connection: DatabaseConnection<Conn>,
     work_queue: mpsc::Receiver<DatabaseRequest>,
 }
 
@@ -35,9 +36,9 @@ pub fn transform_err<T>(error: surrealdb::Result<T>) -> anyhow::Result<T> {
     }
 }
 
-impl DatabaseManager {
+impl<Conn: Connection> DatabaseManager<Conn> {
     pub fn new(
-        db_connection: DatabaseConnection,
+        db_connection: DatabaseConnection<Conn>,
         work_queue: mpsc::Receiver<DatabaseRequest>,
     ) -> Self {
         Self {
@@ -50,7 +51,7 @@ impl DatabaseManager {
         while let Some(request) = self.work_queue.recv().await {
             match request {
                 DatabaseRequest::GetUser { name, responder } => {
-                    let resp = transform_err(self.db_connection.get_user_by_name(&name).await);
+                    let resp = transform_err(self.db_connection.get_user_by_name(name.as_ref()).await);
                     let _ = responder.send(resp);
                 }
                 DatabaseRequest::GetAllWagerInfo { responder } => {
@@ -58,7 +59,7 @@ impl DatabaseManager {
                     let _ = responder.send(resp);
                 }
                 DatabaseRequest::GetWagerInfo { id, responder } => {
-                    let resp = transform_err(self.db_connection.get_info_for_wager(id).await);
+                    let resp = transform_err(self.db_connection.get_info_for_wager(&id).await);
                     let _ = responder.send(resp);
                 }
                 DatabaseRequest::ProvidePayout {

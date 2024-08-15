@@ -1,3 +1,5 @@
+use surrealdb::Connection;
+use surrealdb::engine::remote::ws::Client;
 use tokio::join;
 use tokio::sync::mpsc;
 
@@ -12,7 +14,7 @@ use wager_manager::WagerManager;
 
 #[tokio::main]
 async fn main() {
-    let mut database = DatabaseConnection::new("127.0.0.1:8000").await.unwrap();
+    let mut database = DatabaseConnection::<Client>::new("127.0.0.1:8000").await.unwrap();
 
     let _ = generate_test_data(&mut database).await;
 
@@ -40,7 +42,7 @@ async fn main() {
     res3.unwrap();
 }
 
-async fn generate_test_data(database_connection: &mut DatabaseConnection) -> anyhow::Result<()> {
+async fn generate_test_data(database_connection: &mut DatabaseConnection<impl Connection>) -> anyhow::Result<()> {
     let user_id = database_connection.add_user(&DbUser::new("aidan", 2000)).await?;
     let user_id = if let Some(record) = user_id {
         record.id
@@ -63,9 +65,6 @@ async fn generate_test_data(database_connection: &mut DatabaseConnection) -> any
     };
 
     //we truly do not care if this doesn't work
-    let bet_id = database_connection.add_bet_db(&DbBet::new(user_id, wager_option_id, 200)).await;
-    if let Err(e) = bet_id {
-        println!("{:?}", e);
-    }
+    let _bet_id = database_connection.add_bet_db(&DbBet::new(user_id, wager_option_id, 200)).await;
     Ok(())
 }
